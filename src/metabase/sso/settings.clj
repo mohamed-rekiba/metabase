@@ -4,6 +4,7 @@
    [metabase.config.core :as config]
    [metabase.premium-features.core :as premium-features]
    [metabase.settings.core :as setting :refer [defsetting define-multi-setting define-multi-setting-impl]]
+   [metabase.system.core :as system]
    [metabase.util :as u]
    [metabase.util.i18n :refer [deferred-tru tru]]
    [metabase.util.json :as json]
@@ -271,6 +272,71 @@
                     (setting/set-value-of-type! :boolean :google-auth-enabled new-value))
                   (setting/set-value-of-type! :boolean :google-auth-enabled new-value))))
 
+;;; ------------------------------------------------ Env OIDC (MB_OIDC_PROVIDERS) ------------------------------------------------
+
+(defsetting oidc-providers
+  (deferred-tru "JSON containing OIDC provider configurations.")
+  :encryption  :when-encryption-key-set
+  :type        :json
+  :default     []
+  :visibility  :settings-manager
+  :export?     false
+  :audit       :no-value
+  :sensitive?  true)
+
+(defn- env-oidc-key
+  [entry]
+  (some-> (or (:key entry) (get entry "key")) str))
+
+(defn env-oidc-provider-active?
+  [entry]
+  (boolean (or (:enabled entry) (get entry "enabled"))))
+
+(defn lookup-env-oidc-provider
+  "Return the MB_OIDC_PROVIDERS entry for `provider-key`, or nil."
+  [provider-key]
+  (some #(when (= (env-oidc-key %) (str provider-key)) %)
+        (oidc-providers)))
+
+(defn- login-button-for
+  [entry site-prefix]
+  (let [key (env-oidc-key entry)]
+    {:type         "oidc"
+     :key          key
+     :login-prompt (or (:login-prompt entry) (get entry "login-prompt") "Login with SSO")
+     :sso-url      (str site-prefix key)}))
+
+(defsetting oidc-enabled
+  (deferred-tru "Is any OIDC provider enabled?")
+  :type    :boolean
+  :default false
+  :setter  :none
+  :getter  (fn [] (some env-oidc-provider-active? (oidc-providers)))
+  :export? false)
+
+(defsetting oidc-login-providers
+  (deferred-tru "Public-facing list of enabled OIDC providers for the login page.")
+  :type       :json
+  :default    []
+  :visibility :public
+  :setter     :none
+  :getter     (fn []
+                (let [site-prefix (str (system/site-url) "/auth/sso/")]
+                  (into []
+                        (keep (fn [entry]
+                                (when (env-oidc-provider-active? entry)
+                                  (login-button-for entry site-prefix))))
+                        (oidc-providers))))
+  :export?    false)
+
+(defsetting oidc-user-provisioning-enabled?
+  (deferred-tru "Determines what happens when a user logs in via OIDC and doesn''t have a Metabase account.")
+  :type    :boolean
+  :default true
+  :export? false
+  :audit   :getter
+  :doc     "When set to `true`, users who log in via OIDC will automatically get a Metabase account if they don't have one.")
+
 (defsetting oidc-allowed-networks
   (deferred-tru "What networks are OIDC requests allowed to? Possible values: ''allow-all'' (default), ''allow-private'', or ''external-only''.")
   :type :keyword
@@ -290,6 +356,7 @@
   []
   (or (google-auth-enabled)
       (ldap-enabled)
+      (oidc-enabled)
       (ee-sso-configured?)))
 
 (defn sso-source-enabled?
