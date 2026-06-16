@@ -11,6 +11,7 @@ import {
 import { Box, Flex, Stack } from "metabase/ui";
 
 import { ApiKeysAuthCard } from "../../auth/components/ApiKeysAuthCard";
+import { OidcAuthCard } from "../../auth/containers/OidcAuthCard";
 import { GoogleAuthCard } from "../../auth/containers/GoogleAuthCard/GoogleAuthCard";
 import { LdapAuthCard } from "../../auth/containers/LdapAuthCard";
 import { ManageApiKeys } from "../ApiKeys/ManageApiKeys";
@@ -36,6 +37,7 @@ export function AuthenticationSettingsPage({
         <Stack gap="lg">
           <GoogleAuthCard />
           <LdapAuthCard />
+          <OidcAuthCard />
           <ApiKeysAuthCard />
         </Stack>
         <Box style={{ flexShrink: 0 }}>

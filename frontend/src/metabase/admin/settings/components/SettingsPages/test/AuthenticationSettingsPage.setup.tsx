@@ -85,7 +85,7 @@ export const setup = async (
   setupSettingsEndpoints([]);
   setupApiKeyEndpoints(testApiKeys);
   setupTokenStatusEndpoint({ valid: isEnterprise });
-  fetchMock.get("path:/api/ee/sso/oidc", []);
+  fetchMock.get("path:/api/sso/oidc", []);
 
   renderWithProviders(
     <div>

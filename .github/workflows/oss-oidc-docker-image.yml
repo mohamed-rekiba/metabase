@@ -1,0 +1,118 @@
+name: OSS OIDC Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Image tag override (e.g. v0.61.2-oss-oidc.3). Leave empty to auto-increment
+          from the highest existing v*-oss-oidc.N tag in git or on Docker Hub.
+        required: false
+        default: ""
+      push:
+        description: Push to Docker Hub
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*-oss-oidc.*"
+
+permissions:
+  contents: read
+
+env:
+  # Docker Hub namespace/repo — override with repository variable DOCKERHUB_IMAGE if needed.
+  IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve image tags
+        id: meta
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            IMAGE="${{ env.IMAGE }}"
+            git fetch --tags --force
+
+            # Collect v*-oss-oidc.N tags from git and Docker Hub, then bump the highest N.
+            GIT_TAGS="$(git tag -l 'v*-oss-oidc.*' || true)"
+
+            HUB_TAGS=""
+            NS="${IMAGE%%/*}"
+            REPO="${IMAGE#*/}"
+            PAGE=1
+            while true; do
+              RESP="$(curl -fsS "https://hub.docker.com/v2/repositories/${NS}/${REPO}/tags?page_size=100&page=${PAGE}" 2>/dev/null || echo '{"results":[]}')"
+              PAGE_TAGS="$(echo "$RESP" | jq -r '.results[].name // empty' | grep -E '^v.*-oss-oidc\.[0-9]+$' || true)"
+              if [ -n "$PAGE_TAGS" ]; then
+                HUB_TAGS="${HUB_TAGS}${HUB_TAGS:+$'\n'}${PAGE_TAGS}"
+              fi
+              NEXT="$(echo "$RESP" | jq -r '.next // empty')"
+              [ -z "$NEXT" ] && break
+              PAGE=$((PAGE + 1))
+            done
+
+            LATEST_TAG="$( { echo "$GIT_TAGS"; echo "$HUB_TAGS"; } | sed '/^$/d' | sort -V | tail -1 || true)"
+
+            if [ -z "$LATEST_TAG" ]; then
+              BASE="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null | cut -d'-' -f1 || true)"
+              if [ -z "$BASE" ]; then
+                echo "Could not determine base version; set the version input or create a v* git tag." >&2
+                exit 1
+              fi
+              TAG="${BASE}-oss-oidc.1"
+            else
+              PREFIX="${LATEST_TAG%.*}"
+              NUM="${LATEST_TAG##*.}"
+              TAG="${PREFIX}.$((NUM + 1))"
+            fi
+
+            echo "Latest oss-oidc tag (git + Docker Hub): ${LATEST_TAG:-none}"
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${{ env.IMAGE }}:${TAG}"
+            echo "${{ env.IMAGE }}:latest"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved tags:"
+          echo "  ${{ env.IMAGE }}:${TAG}"
+          echo "  ${{ env.IMAGE }}:latest"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.12.0
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' || github.event.inputs.push != false
+        uses: docker/login-action@v3.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6.18.0
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' || github.event.inputs.push != false }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            MB_EDITION=oss
+            VERSION=${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

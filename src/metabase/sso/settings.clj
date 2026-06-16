@@ -4,6 +4,7 @@
    [metabase.config.core :as config]
    [metabase.premium-features.core :as premium-features]
    [metabase.settings.core :as setting :refer [defsetting define-multi-setting define-multi-setting-impl]]
+   [metabase.system.core :as system]
    [metabase.util :as u]
    [metabase.util.i18n :refer [deferred-tru tru]]
    [metabase.util.json :as json]
@@ -271,6 +272,89 @@
                     (setting/set-value-of-type! :boolean :google-auth-enabled new-value))
                   (setting/set-value-of-type! :boolean :google-auth-enabled new-value))))
 
+;;; ------------------------------------------------ Configured OIDC ------------------------------------------------
+
+(defsetting oidc-providers
+  (deferred-tru "JSON containing OIDC provider configurations.")
+  :encryption  :when-encryption-key-set
+  :type        :json
+  :default     []
+  :visibility  :settings-manager
+  :export?     false
+  :audit       :no-value
+  :sensitive?  true)
+
+(defn get-oidc-provider
+  "Return the configured OIDC provider for `provider-key`, or nil."
+  [provider-key]
+  (some (fn [provider]
+          (when (= (some-> (or (:key provider) (get provider "key")) str)
+                   (str provider-key))
+            provider))
+        (oidc-providers)))
+
+(defn set-oidc-providers!
+  "Replace all configured OIDC providers."
+  [providers]
+  (setting/set-value-of-type! :json :oidc-providers providers))
+
+(defn- oidc-provider-enabled?
+  [provider]
+  (boolean (or (:enabled provider) (get provider "enabled"))))
+
+(defn- login-button-for
+  [provider site-prefix]
+  (let [key (some-> (or (:key provider) (get provider "key")) str)]
+    {:type         "oidc"
+     :key          key
+     :login-prompt (or (:login-prompt provider) (get provider "login-prompt") "Login with SSO")
+     :sso-url      (str site-prefix key)}))
+
+(defsetting oidc-configured?
+  (deferred-tru "Are any OIDC providers configured with required fields?")
+  :type       :boolean
+  :default    false
+  :setter     :none
+  :visibility :public
+  :getter     (fn [] (boolean
+                      (some (fn [provider]
+                              (and (or (:issuer-uri provider) (get provider "issuer-uri"))
+                                   (or (:client-id provider) (get provider "client-id"))
+                                   (or (:client-secret provider) (get provider "client-secret"))))
+                            (oidc-providers))))
+  :export?    false)
+
+(defsetting oidc-enabled
+  (deferred-tru "Is any OIDC provider enabled?")
+  :type       :boolean
+  :default    false
+  :setter     :none
+  :visibility :public
+  :getter     (fn [] (boolean (seq (filter oidc-provider-enabled? (oidc-providers)))))
+  :export?    false)
+
+(defsetting oidc-login-providers
+  (deferred-tru "Public-facing list of enabled OIDC providers for the login page.")
+  :type       :json
+  :default    []
+  :visibility :public
+  :setter     :none
+  :getter     (fn []
+                (let [site-prefix (str (system/site-url) "/auth/sso/")]
+                  (into []
+                        (comp (filter oidc-provider-enabled?)
+                              (map #(login-button-for % site-prefix)))
+                        (oidc-providers))))
+  :export?    false)
+
+(defsetting oidc-user-provisioning-enabled?
+  (deferred-tru "Determines what happens when a user logs in via OIDC and doesn''t have a Metabase account.")
+  :type    :boolean
+  :default true
+  :export? false
+  :audit   :getter
+  :doc     "When set to `true`, users who log in via OIDC will automatically get a Metabase account if they don't have one.")
+
 (defsetting oidc-allowed-networks
   (deferred-tru "What networks are OIDC requests allowed to? Possible values: ''allow-all'' (default), ''allow-private'', or ''external-only''.")
   :type :keyword
@@ -290,6 +374,7 @@
   []
   (or (google-auth-enabled)
       (ldap-enabled)
+      (oidc-enabled)
       (ee-sso-configured?)))
 
 (defn sso-source-enabled?
@@ -308,7 +393,7 @@
      ;; regardless of license status.
      :saml   (setting/get :saml-enabled)
      :jwt    (setting/get :jwt-enabled)
-     :oidc   (setting/get :oidc-enabled?)
+     :oidc   (oidc-enabled)
      :slack  (setting/get :slack-connect-enabled)
      :scim   (setting/get :scim-enabled)
      ;; Unknown sso_source -- treat as disabled to allow password reset

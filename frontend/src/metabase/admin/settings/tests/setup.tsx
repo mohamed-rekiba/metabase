@@ -171,6 +171,7 @@ export const setup = async ({
     advisories: [],
   });
   fetchMock.get("path:/api/cloud-migration", { status: 204 });
+  fetchMock.get("path:/api/sso/oidc", []);
   fetchMock.get("path:/api/ee/sso/oidc", []);
   fetchMock.get("path:/api/ee/remote-sync/dirty", {
     data: [],
